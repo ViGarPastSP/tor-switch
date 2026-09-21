@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Tor Switch",
+  "version": "1.0.0",
+  "description": "Quickly enable or disable a local SOCKS5 proxy for Tor.",
+  "permissions": [
+    "proxy",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Tor Switch",
+    "default_icon": {
+      "16": "icons/icon16.svg",
+      "32": "icons/icon32.svg",
+      "48": "icons/icon48.svg",
+      "128": "icons/icon128.svg"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.svg",
+    "32": "icons/icon32.svg",
+    "48": "icons/icon48.svg",
+    "128": "icons/icon128.svg"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": false
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tor-switch@local.extension",
+      "strict_min_version": "109.0"
+    }
+  }
+}

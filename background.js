@@ -1,12 +1,18 @@
 /**
- * Tor Switch - Background Service Worker
+ * Tor Switch - Background script / service worker
  * Manages proxy configuration for a local Tor SOCKS5 endpoint.
+ * Supports both Chrome (chrome.proxy) and Firefox (browser.proxy).
  * Does NOT run Tor itself. Does NOT claim connectivity guarantees.
  */
 
 'use strict';
 
-const DEFAULT_TOR_PROXY = {
+// Cross-browser API alias
+const api = typeof browser !== 'undefined' ? browser : chrome;
+const isFirefox = typeof browser !== 'undefined';
+
+// Chrome-style configuration
+const CHROME_TOR_PROXY = {
   mode: 'fixed_servers',
   rules: {
     singleProxy: {
@@ -16,6 +22,15 @@ const DEFAULT_TOR_PROXY = {
     },
     bypassList: ['localhost', '127.0.0.1']
   }
+};
+
+// Firefox-style configuration (completely different schema)
+const FIREFOX_TOR_PROXY = {
+  proxyType: 'manual',
+  socks: '127.0.0.1',
+  socksVersion: 5,
+  proxyDNS: true,
+  passthrough: 'localhost, 127.0.0.1'
 };
 
 const STORAGE_KEYS = {
@@ -28,7 +43,7 @@ const STORAGE_KEYS = {
  */
 async function getStoredState() {
   try {
-    const data = await chrome.storage.local.get([
+    const data = await api.storage.local.get([
       STORAGE_KEYS.TOR_ENABLED,
       STORAGE_KEYS.PREVIOUS_PROXY
     ]);
@@ -52,45 +67,55 @@ async function saveState(enabled, previousProxy) {
   if (previousProxy !== undefined) {
     payload[STORAGE_KEYS.PREVIOUS_PROXY] = previousProxy;
   }
-  await chrome.storage.local.set(payload);
+  await api.storage.local.set(payload);
 }
 
 /**
- * Read the current browser proxy settings (regular profile).
- * Returns a serializable object or null on failure.
+ * Read the current browser proxy settings.
+ * Returns the raw value object (browser-specific format) or null.
  */
 async function getCurrentProxyConfig() {
-  return new Promise((resolve) => {
-    try {
-      chrome.proxy.settings.get({ incognito: false }, (config) => {
-        if (chrome.runtime.lastError) {
-          console.error('[Tor Switch] proxy.settings.get error:', chrome.runtime.lastError);
+  try {
+    if (isFirefox) {
+      // Firefox returns a BrowserSetting result
+      const details = await api.proxy.settings.get({});
+      return details ? details.value : null;
+    }
+
+    // Chrome callback style
+    return new Promise((resolve) => {
+      api.proxy.settings.get({ incognito: false }, (config) => {
+        if (api.runtime.lastError) {
+          console.error('[Tor Switch] proxy.settings.get error:', api.runtime.lastError);
           resolve(null);
           return;
         }
-        // Store a clean copy that can be restored later
-        resolve(config ? { value: config.value, levelOfControl: config.levelOfControl } : null);
+        resolve(config && config.value ? config.value : null);
       });
-    } catch (err) {
-      console.error('[Tor Switch] Exception reading proxy settings:', err);
-      resolve(null);
-    }
-  });
+    });
+  } catch (err) {
+    console.error('[Tor Switch] Exception reading proxy settings:', err);
+    return null;
+  }
 }
 
 /**
- * Apply a proxy configuration object.
- * @param {object} config - Chrome proxy settings value object
- * @returns {Promise<{success: boolean, error?: string}>}
+ * Apply a proxy configuration (value object already in the correct browser format).
  */
-function applyProxyConfig(config) {
-  return new Promise((resolve) => {
-    try {
-      chrome.proxy.settings.set(
+async function applyProxyConfig(config) {
+  try {
+    if (isFirefox) {
+      await api.proxy.settings.set({ value: config });
+      return { success: true };
+    }
+
+    // Chrome
+    return new Promise((resolve) => {
+      api.proxy.settings.set(
         { value: config, scope: 'regular' },
         () => {
-          if (chrome.runtime.lastError) {
-            console.error('[Tor Switch] proxy.settings.set error:', chrome.runtime.lastError);
+          if (api.runtime.lastError) {
+            console.error('[Tor Switch] proxy.settings.set error:', api.runtime.lastError);
             resolve({
               success: false,
               error: 'Unable to apply proxy settings.'
@@ -100,36 +125,24 @@ function applyProxyConfig(config) {
           resolve({ success: true });
         }
       );
-    } catch (err) {
-      console.error('[Tor Switch] Exception applying proxy:', err);
-      resolve({
-        success: false,
-        error: 'Unable to apply proxy settings.'
-      });
-    }
-  });
+    });
+  } catch (err) {
+    console.error('[Tor Switch] Exception applying proxy:', err);
+    return {
+      success: false,
+      error: 'Unable to apply proxy settings. ' + (err.message || '')
+    };
+  }
 }
 
 /**
- * Clear control of proxy settings (fallback when no previous config).
+ * Return the correct “system / direct” fallback for the current browser.
  */
-function clearProxyControl() {
-  return new Promise((resolve) => {
-    try {
-      chrome.proxy.settings.clear({ scope: 'regular' }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('[Tor Switch] proxy.settings.clear error:', chrome.runtime.lastError);
-          // Fall back to system mode
-          applyProxyConfig({ mode: 'system' }).then(resolve);
-          return;
-        }
-        resolve({ success: true });
-      });
-    } catch (err) {
-      console.error('[Tor Switch] Exception clearing proxy:', err);
-      resolve({ success: false, error: 'Unable to restore previous proxy settings.' });
-    }
-  });
+function getSystemFallback() {
+  if (isFirefox) {
+    return { proxyType: 'system' };
+  }
+  return { mode: 'system' };
 }
 
 /**
@@ -138,7 +151,6 @@ function clearProxyControl() {
 async function enableTor() {
   const state = await getStoredState();
 
-  // Already enabled — idempotent success
   if (state.enabled) {
     return {
       success: true,
@@ -148,16 +160,12 @@ async function enableTor() {
   }
 
   // Capture current proxy configuration before overwriting
-  const current = await getCurrentProxyConfig();
-  let previousToStore = null;
+  const previousToStore = await getCurrentProxyConfig();
 
-  if (current && current.value) {
-    // Only store if we actually control or can restore something meaningful
-    previousToStore = current.value;
-  }
+  // Choose the correct format for this browser
+  const torConfig = isFirefox ? FIREFOX_TOR_PROXY : CHROME_TOR_PROXY;
 
-  // Apply Tor SOCKS5 configuration
-  const result = await applyProxyConfig(DEFAULT_TOR_PROXY);
+  const result = await applyProxyConfig(torConfig);
   if (!result.success) {
     return {
       success: false,
@@ -181,7 +189,6 @@ async function enableTor() {
 async function disableTor() {
   const state = await getStoredState();
 
-  // Already disabled — idempotent
   if (!state.enabled) {
     return {
       success: true,
@@ -193,19 +200,16 @@ async function disableTor() {
   let restoreResult;
 
   if (state.previousProxy && typeof state.previousProxy === 'object') {
-    // Attempt to restore the exact previous configuration
     restoreResult = await applyProxyConfig(state.previousProxy);
     if (!restoreResult.success) {
       console.warn('[Tor Switch] Failed to restore previous proxy; falling back to system.');
-      restoreResult = await applyProxyConfig({ mode: 'system' });
+      restoreResult = await applyProxyConfig(getSystemFallback());
     }
   } else {
-    // No saved config — safely fall back to system
-    restoreResult = await applyProxyConfig({ mode: 'system' });
+    restoreResult = await applyProxyConfig(getSystemFallback());
   }
 
-  // Always mark as disabled even if restore had issues,
-  // so the UI and future toggles stay consistent.
+  // Always mark as disabled so UI stays consistent
   await saveState(false, null);
 
   if (!restoreResult.success) {
@@ -225,7 +229,6 @@ async function disableTor() {
 
 /**
  * Return current known state (from storage).
- * Does not probe the network or claim Tor connectivity.
  */
 async function getState() {
   const state = await getStoredState();
@@ -241,9 +244,9 @@ async function getState() {
 }
 
 /**
- * Message handler for popup and other extension pages.
+ * Message handler
  */
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.action !== 'string') {
     sendResponse({ success: false, error: 'Invalid message.' });
     return false;
@@ -272,30 +275,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     });
 
-  // Keep the message channel open for async response
-  return true;
+  return true; // keep channel open for async response
 });
 
 /**
  * On install / update: never auto-enable Tor.
- * Ensure clean initial state on first install.
  */
-chrome.runtime.onInstalled.addListener(async (details) => {
+api.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {
-    // Explicitly start disabled; do not touch proxy settings
     await saveState(false, null);
     console.log('[Tor Switch] Installed. Tor proxy remains OFF until the user enables it.');
   } else if (details.reason === 'update') {
-    // Preserve existing state; do not force enable or overwrite proxy
     console.log('[Tor Switch] Updated. Existing state preserved.');
   }
 });
 
-/**
- * Note on extension removal:
- * Chrome does not provide a reliable synchronous uninstall hook that can
- * always restore proxy settings. If the extension is removed while Tor is
- * enabled, the proxy configuration may remain until the user changes it
- * manually or reinstalls. Document this limitation for users.
- */
-console.log('[Tor Switch] Service worker started.');
+console.log('[Tor Switch] Background started. Browser:', isFirefox ? 'Firefox' : 'Chromium');

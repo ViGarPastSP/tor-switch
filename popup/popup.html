@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tor Switch</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container" role="main">
+    <header class="header">
+      <h1 id="title">Tor Switch</h1>
+    </header>
+
+    <section class="status-section" aria-live="polite" aria-atomic="true">
+      <div class="status-row">
+        <span id="status-indicator" class="indicator off" aria-hidden="true">○</span>
+        <span id="status-text" class="status-text">Tor is OFF</span>
+      </div>
+      <p id="status-detail" class="status-detail">
+        Your browser is using its normal connection.
+      </p>
+    </section>
+
+    <section id="proxy-info" class="proxy-info hidden" aria-hidden="true">
+      <div class="proxy-label">Proxy</div>
+      <div id="proxy-value" class="proxy-value">SOCKS5 127.0.0.1:9050</div>
+    </section>
+
+    <div id="message-area" class="message-area" role="status" aria-live="polite"></div>
+
+    <div class="actions">
+      <button id="toggle-btn" class="btn primary" type="button" disabled>
+        Loading…
+      </button>
+    </div>
+
+    <footer class="footer">
+      <p class="hint">Tor must be running locally on 127.0.0.1:9050.</p>
+      <p class="disclaimer">This extension only configures the browser proxy. It does not contain Tor.</p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

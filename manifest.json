@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Tor Switch",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Quickly enable or disable a local SOCKS5 proxy for Tor.",
   "permissions": [
     "proxy",
     "storage"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
   "action": {
     "default_popup": "popup/popup.html",
